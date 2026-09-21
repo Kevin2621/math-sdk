@@ -258,7 +258,7 @@ fn print_information(
         win_dist_index_map.insert(F64Wrapper(win.clone()), count);
         count += 1;
     }
-    let num_pigs = 10;
+    let num_pigs = show_pigs.len().min(10);
 
     (0..num_pigs).into_par_iter().for_each(|pig_index| {
         println!("Printing info for Distribution {}", pig_index + 1);
@@ -1115,7 +1115,7 @@ fn create_ancestors(
             let dress = Dress {
                 fence: "".to_string(),
                 scale_factor: ScaleFactor::Factor(150.0), // Use the ScaleFactor enum variant Factor
-                identity_condition_win_range: [pig_heaven.min_win, pig_heaven.avg_win / 2.0],
+                identity_condition_win_range: [pig_heaven.min_win, (pig_heaven.min_win + pig_heaven.avg_win) / 2.0],
                 prob: 1.0,
             };
             extra_params.push(dress);
@@ -1123,7 +1123,7 @@ fn create_ancestors(
             let dress2 = Dress {
                 fence: "".to_string(),
                 scale_factor: ScaleFactor::Factor(0.0001), // Use the ScaleFactor enum variant Factor
-                identity_condition_win_range: [pig_heaven.avg_win / 2.0, pig_heaven.max_win],
+                identity_condition_win_range: [(pig_heaven.min_win + pig_heaven.avg_win) / 2.0, pig_heaven.max_win],
                 prob: 1.0,
             };
             extra_params.push(dress2);
@@ -1135,7 +1135,7 @@ fn create_ancestors(
             let dress = Dress {
                 fence: "".to_string(),
                 scale_factor: ScaleFactor::Factor(50.0),
-                identity_condition_win_range: [pig_heaven.avg_win * 2.0, pig_heaven.max_win],
+                identity_condition_win_range: [(pig_heaven.avg_win + pig_heaven.max_win) / 2.0, pig_heaven.max_win],
                 prob: 1.0,
             };
             extra_params.push(dress);
