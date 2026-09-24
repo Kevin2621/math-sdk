@@ -115,6 +115,7 @@ fn run_farm(
         println!("\nCreating {} Fence\n", fence.name);
         sort_wins_by_parameter(&mut fence, &force_options, &mut lookup_table);
         exit_if_fence_has_no_books(fence);
+        resolve_fixed_payout(fence, bet_amount);
 
         let bias_betmode: Vec<BiasJson> = config_file.bias[bias_index].bias.clone();
         let mut bias_fence: Option<BiasJson> = None;
@@ -191,6 +192,7 @@ fn run_farm(
     }
 
     sorted_wins.sort_by(|a, b| a.partial_cmp(&b).unwrap());
+    sorted_wins.dedup();
 
     let sorted_wins_array = Array1::from_vec(sorted_wins);
 
@@ -676,6 +678,14 @@ fn sort_wins_by_parameter(
                 .collect()
         };
 
+        // Exact payout must still respect metadata, including entry-specific caps.
+        let keys_to_remove: Vec<u32> = keys_to_remove.into_iter().filter(|id| {
+            fence.identity_condition.search.is_empty() || force_options.iter().any(|option| {
+                option.bookIds.contains(id) && fence.identity_condition.search.iter().all(|key| {
+                    key.value == "None" || option.search.iter().any(|value| value.name == key.name && value.value == key.value)
+                })
+            })
+        }).collect();
         for key in keys_to_remove {
             let entry = lookup_table.remove(&key);
             if let Some(result) = entry {
@@ -735,6 +745,22 @@ fn sort_wins_by_parameter(
             }
         }
     }
+}
+
+// Determine fixed support after metadata selection, before the mixture search.
+fn resolve_fixed_payout(fence: &mut Fence, bet_amount: f64) {
+    if fence.win_dist.len() != 1 {
+        assert!(!fence.win_type, "Exact-payout fence selected multiple payouts");
+        return;
+    }
+    let payout = fence.win_dist.keys().next().unwrap().0;
+    let requested = if fence.win_type { fence.avg_win } else { fence.avg_win * bet_amount };
+    assert!((requested - payout).abs() <= 1e-9 * payout.abs().max(1.0),
+        "Fixed-payout target mean disagrees with selected support");
+    assert!(fence.hr.is_finite() && fence.hr >= 1.0, "Invalid fixed-payout hit interval");
+    fence.win_type = true;
+    fence.avg_win = payout;
+    fence.wins = vec![payout];
 }
 
 fn exit_if_fence_has_no_books(fence: &Fence) {
@@ -1632,4 +1658,60 @@ impl Hash for F64Wrapper {
 struct ShowPig {
     pub pig_indexes: Vec<usize>,
     pub success_score: f64
+}
+
+#[cfg(test)]
+mod fixed_payout_tests {
+    use super::*;
+    fn fixture(name: &str, payout: f64, exact: bool) -> Fence {
+        let json: FenceJson = serde_json::from_value(serde_json::json!({
+            "name": name, "hr": "100", "rtp": (payout/100.0).to_string(),
+            "avg_win": payout.to_string(),
+            "identity_condition": {"search":[{"name":"entry","value":name}],
+            "opposite":false,"win_range_start":if exact {payout} else {-1.0},
+            "win_range_end":if exact {payout} else {-1.0}}
+        })).unwrap();
+        parse_fence_info(&json, &mut 0.0, 1.0, &vec![])
+    }
+    fn force(name: &str, id: u32) -> SearchResult {
+        serde_json::from_value(serde_json::json!({"search":[{"name":"entry","value":name}],
+            "timesTriggered":1,"bookIds":[id]})).unwrap()
+    }
+    #[test]
+    fn shared_payouts_keep_metadata_and_probability() {
+        for payout in [0.0, 5000.0] {
+            for exact in [false, true] {
+                let mut lookup = HashMap::from([
+                    (1,LookUpTableEntry{id:1,weight:1,win:payout}),
+                    (2,LookUpTableEntry{id:2,weight:1,win:payout})]);
+                let forces=vec![force("10",1),force("20",2)];
+                for (name,id,hr) in [("10",1,100.0),("20",2,1000.0)] {
+                    let mut fence=fixture(name,payout,exact);
+                    fence.hr=hr;
+                    sort_wins_by_parameter(&mut fence,&forces,&mut lookup);
+                    resolve_fixed_payout(&mut fence,1.0);
+                    assert!(fence.win_type);
+                    assert_eq!(fence.win_dist[&F64Wrapper(payout)],vec![id]);
+                    assert_eq!(fence.hr,hr);
+                    assert_eq!(fence.avg_win,payout);
+                }
+                assert!(lookup.is_empty());
+            }
+        }
+    }
+    #[test]
+    #[should_panic(expected="target mean disagrees")]
+    fn impossible_mean_is_rejected() {
+        let mut fence=fixture("10",30.0,false);
+        fence.win_dist.insert(F64Wrapper(50.0),vec![1]);
+        resolve_fixed_payout(&mut fence,1.0);
+    }
+    #[test]
+    fn varied_support_keeps_mixture_search() {
+        let mut fence=fixture("10",30.0,false);
+        fence.win_dist.insert(F64Wrapper(20.0),vec![1]);
+        fence.win_dist.insert(F64Wrapper(40.0),vec![2]);
+        resolve_fixed_payout(&mut fence,1.0);
+        assert!(!fence.win_type);
+    }
 }

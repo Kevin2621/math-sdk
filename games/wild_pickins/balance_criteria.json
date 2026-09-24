@@ -1,0 +1,54 @@
+{
+  "version": "wp-screening-2",
+  "status": "provisional engineering screening criteria; not final math acceptance",
+  "selectedTargets": {
+    "totalReturn": 0.967,
+    "baseReturn": 0.2901,
+    "bonusReturn": 0.6769,
+    "baseShare": 0.3,
+    "basePositiveRate": 0.14285714285714285,
+    "positiveBaseMeanX": 2.0307
+  },
+  "pointTolerances": {
+    "totalReturn": 0.01,
+    "baseReturn": 0.005,
+    "bonusReturn": 0.01,
+    "baseShare": 0.02,
+    "basePositiveRate": 0.005,
+    "positiveBaseMeanX": 0.1
+  },
+  "maximum95HalfWidths": {
+    "totalReturn": 0.005,
+    "baseReturn": 0.003,
+    "bonusReturn": 0.005,
+    "basePositiveRate": 0.0025
+  },
+  "minimumPaidRounds": 100000,
+  "minimumBonusEntries": 2000,
+  "independentValidationSeeds": 3,
+  "reviewThresholds": {
+    "bonusEntryRateRange": [
+      0.006666666666666667,
+      0.01
+    ],
+    "meanBonusSpinsRange": [
+      12,
+      22
+    ],
+    "maximumZeroBonusRate": 0.1,
+    "weakBonusBelowX": 5,
+    "maximumWeakBonusRate": 0.3,
+    "largeRoundAtLeastX": 100,
+    "maximumLargeRoundReturnShare": 0.4
+  },
+  "releaseAcceptance": "Never automatic. Requires independent validation, rare-tail analysis, playtest review and final distribution verification.",
+  "selectedPreferences": {
+    "bonusEntryRateRange": [
+      0.006666666666666667,
+      0.01
+    ],
+    "bonusEntryRateBasis": "per paid base spin; user selected 2026-09-21",
+    "wildGrowth": "Steady additions throughout the bonus, with chances of multiple new Wilds; not guaranteed additions.",
+    "basePayoutShape": "Occasional small payouts and some substantial wins, retaining one-in-seven positive base frequency."
+  }
+}

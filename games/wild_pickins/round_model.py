@@ -6,7 +6,7 @@ from line_model import CROPS, evaluate_lines, MAX_SAFE_INTEGER
 
 Position = tuple[int,int]
 
-def choose_golden(board, sticky, probability: Fraction, rng: Random):
+def choose_golden(board, sticky, probability: Fraction, rng: Random, target_rng=None):
     """Independent trigger draw, then uniform eligible-cell selection; no retries."""
     if not isinstance(probability,Fraction) or not 0 <= probability <= 1:
         raise ValueError('Explicit probability Fraction in [0,1] required')
@@ -14,7 +14,7 @@ def choose_golden(board, sticky, probability: Fraction, rng: Random):
               if (r,y) not in sticky and board[r][y] in CROPS]
     if not eligible: return None
     if rng.randrange(probability.denominator) >= probability.numerator: return None
-    return eligible[rng.randrange(len(eligible))]
+    return eligible[(rng if target_rng is None else target_rng).randrange(len(eligible))]
 
 @dataclass
 class RoundModel:
@@ -26,6 +26,12 @@ class RoundModel:
     bonus_golden: Fraction
     rng: Random
     bonus_paytable: dict | None = None
+    wild_multiplier_weights: tuple | None = None
+    bonus_scatter_pays: dict | None = None
+    collision_spins_per_hit: bool = False
+    settlement_policy: str = 'fullHarvest'
+    experiment_random: object | None = None
+    sticky_multipliers: dict = field(default_factory=dict,init=False)
     mode: str = field(default='basegame',init=False)
     sticky: set = field(default_factory=set,init=False)
     total: int = field(default=0,init=False)
@@ -37,10 +43,18 @@ class RoundModel:
     spin_id: int = field(default=-1,init=False)
 
     def __post_init__(self):
+        if self.settlement_policy not in ('fullHarvest','accumulation'): raise ValueError('settlement policy')
+        if type(self.collision_spins_per_hit) is not bool: raise ValueError('collision policy')
         if type(self.cap) is not int or not 0 < self.cap <= MAX_SAFE_INTEGER: raise ValueError('cap')
         if type(self.spin_budget) is not int or self.spin_budget < 20: raise ValueError('spin budget')
+        if self.bonus_scatter_pays is not None:
+            if set(self.bonus_scatter_pays)!={3,4,5} or any(type(v) is not int or not 0<=v<=MAX_SAFE_INTEGER for v in self.bonus_scatter_pays.values()):
+                raise ValueError('Explicit bonus scatter 3/4/5 cash awards required')
         for p in (self.base_golden,self.bonus_golden):
             if not isinstance(p,Fraction) or not 0 <= p <= 1: raise ValueError('Golden probability')
+        if self.wild_multiplier_weights is not None:
+            if len(self.wild_multiplier_weights)!=3 or any(type(w) is not int or w<0 for w in self.wild_multiplier_weights) or not sum(self.wild_multiplier_weights):
+                raise ValueError('Explicit nonnegative weights for 1x/2x/3x required')
 
     def spin(self, underlying, *, fixture_target=...):
         """Resolve one spin. fixture_target is a deterministic test override, not live input."""
@@ -50,7 +64,11 @@ class RoundModel:
         evaluate_lines(underlying,self.paths,active_paytable)
         if any(reel.count('S')>1 for reel in underlying): raise ValueError('Multiple scatters on reel')
         mode=self.mode; before=set(self.sticky)
-        target=choose_golden(underlying,before,self.base_golden if mode=='basegame' else self.bonus_golden,self.rng) if fixture_target is ... else fixture_target
+        indexed=self.experiment_random
+        spin_index=0 if mode=='basegame' else self.completed
+        trigger_rng=self.rng if indexed is None else indexed.stream(mode,spin_index,'golden-trigger')
+        target_rng=None if indexed is None else indexed.stream(mode,spin_index,'golden-target')
+        target=choose_golden(underlying,before,self.base_golden if mode=='basegame' else self.bonus_golden,trigger_rng,target_rng) if fixture_target is ... else fixture_target
         if target is not None:
             if not isinstance(target,tuple) or len(target)!=2 or any(type(v) is not int for v in target): raise ValueError('target shape')
             r,y=target
@@ -63,21 +81,40 @@ class RoundModel:
         collisions=sorted(p for p in before if underlying[p[0]][p[1]]=='W')
         sticky={(r,y) for r in range(5) for y in range(3) if visible[r][y]=='W'} if mode=='freegame' else set()
         scatters=[(r,y) for r in range(5) for y in range(3) if visible[r][y]=='S']
-        lines=evaluate_lines(visible,self.paths,active_paytable)
+        multipliers=None
+        if self.wild_multiplier_weights is not None:
+            multipliers=dict(self.sticky_multipliers)
+            # New Wilds on a reel share this spin's draw; retained Wilds never reroll.
+            for r in range(5):
+                fresh=[(r,y) for y in range(3) if visible[r][y]=='W' and (r,y) not in before]
+                if fresh:
+                    if indexed is not None:
+                        value=indexed.weighted_value(self.wild_multiplier_weights,mode,spin_index,r)
+                    else:
+                        draw=self.rng.randrange(sum(self.wild_multiplier_weights))
+                        value=1
+                        for value,weight in enumerate(self.wild_multiplier_weights,1):
+                            if draw<weight: break
+                            draw-=weight
+                    for p in fresh: multipliers[p]=value
+        lines=evaluate_lines(visible,self.paths,active_paytable,multipliers)
         line_win=min(lines.total,self.cap-self.total)
+        nominal_scatter=self.bonus_scatter_pays.get(len(scatters),0) if mode=='freegame' and self.bonus_scatter_pays is not None else 0
+        scatter_win=min(nominal_scatter,self.cap-self.total-line_win)
         full=mode=='freegame' and len(sticky)==15
-        topup=self.cap-self.total-line_win if full else 0
-        spin_win=line_win+topup
+        harvest_ends=full and self.settlement_policy=='fullHarvest'
+        topup=self.cap-self.total-line_win-scatter_win if harvest_ends else 0
+        spin_win=line_win+scatter_win+topup
         self.total+=spin_win
         if mode=='freegame': self.bonus_total+=spin_win; self.completed+=1
-        terminal=full or self.total==self.cap
-        collision_award=int(bool(collisions))
-        retrigger={3:5,4:7,5:10}.get(len(scatters),0) if mode=='freegame' else 0
+        terminal=harvest_ends or self.total==self.cap
+        collision_award=len(collisions) if self.collision_spins_per_hit else int(bool(collisions))
+        retrigger={3:5,4:7,5:10}.get(len(scatters),0) if mode=='freegame' and self.bonus_scatter_pays is None else 0
         extra=min(collision_award+retrigger,self.spin_budget-self.granted) if mode=='freegame' and not terminal else 0
         if mode=='freegame':
             self.granted+=extra
             self.remaining=0 if terminal else self.granted-self.completed
-        reason='fullHarvest' if full else 'roundCap' if terminal else 'spinsExhausted' if mode=='freegame' and self.remaining==0 else None
+        reason='fullHarvest' if harvest_ends else 'roundCap' if terminal else 'spinsExhausted' if mode=='freegame' and self.remaining==0 else None
         self.spin_id+=1
         result=dict(spinId=self.spin_id,gameType=mode,underlyingBoard=[list(r) for r in underlying],revealBoard=reveal,
             stickyBefore=sorted(before),goldenTarget=target,expectedCrop=expected,finalBoard=visible,
@@ -86,10 +123,17 @@ class RoundModel:
             completedBonusSpins=self.completed,remaining=self.remaining,totalGranted=self.granted,
             lineWin=line_win,harvestTopUp=topup,spinWin=spin_win,bonusTotal=self.bonus_total,roundTotal=self.total,
             endReason=reason,lines=lines,entryAward=0)
+        if multipliers is not None:
+            result['nominalScatterWin']=nominal_scatter
+            result['scatterWin']=scatter_win
+            result['wildMultipliers']=dict(multipliers)
+            result['revealWildMultipliers']={p:v for p,v in multipliers.items() if p!=target}
+            self.sticky_multipliers=dict(multipliers) if mode=='freegame' else {}
         self.sticky=sticky
         if mode=='basegame' and not terminal and len(scatters)>=3:
             result['entryAward']={3:10,4:15,5:20}[len(scatters)]
             self.mode='freegame';self.granted=self.remaining=result['entryAward'];self.sticky=set()
         elif mode=='basegame' or terminal or self.remaining==0:
             self.ended=True;self.sticky=set();self.mode='basegame'
+            self.sticky_multipliers={}
         return result

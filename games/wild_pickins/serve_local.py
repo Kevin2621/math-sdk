@@ -8,10 +8,14 @@ from pathlib import Path
 from urllib.parse import urlparse, parse_qs
 from generate_experimental import generate_round
 from weighted_playtest import load_profile, HASHES
+from candidate_playtest import response as candidate_response
 
 CONFIG_PATH=Path(__file__).parent/'experiments/wp25-separate-bonus.json'
 CONFIG=json.loads(CONFIG_PATH.read_text())
 CONFIG_HASH=hashlib.sha256(CONFIG_PATH.read_bytes()).hexdigest()
+MULTIPLIER_PATH=Path(__file__).parent/'experiments/wp25-split4060-hit25.json'
+MULTIPLIER_CONFIG=json.loads(MULTIPLIER_PATH.read_text())
+MULTIPLIER_HASH=hashlib.sha256(MULTIPLIER_PATH.read_bytes()).hexdigest()
 
 @lru_cache(maxsize=2)
 def weighted_profile(profile):
@@ -19,8 +23,14 @@ def weighted_profile(profile):
 
 @lru_cache(maxsize=128)
 def round_response(seed, identity, profile='natural'):
+    if profile in ('candidate-1','candidate-3','candidate-500k-1'):
+        return candidate_response(seed,identity,profile)
     source_id=identity
-    if profile=='natural':
+    config_hash=CONFIG_HASH
+    if profile=='multiplier-wilds':
+        _,book=generate_round(MULTIPLIER_CONFIG,seed,identity)
+        config_hash=MULTIPLIER_HASH
+    elif profile=='natural':
         _,book=generate_round(CONFIG,seed,identity)
     else:
         table,source_seed=weighted_profile(profile)
@@ -28,7 +38,7 @@ def round_response(seed, identity, profile='natural'):
         sdk,book=generate_round(CONFIG,source_seed,source_id)
         if sdk['payoutMultiplier']!=expected:raise ValueError('Weighted source payout mismatch')
     encoded=json.dumps(book,separators=(',',':'))
-    return dict(protocol='wp-local-1',seed=seed,roundId=identity,profile=profile,sourceBookId=source_id,lookupSha256=HASHES.get(profile),configSha256=CONFIG_HASH,
+    return dict(protocol='wp-local-1',seed=seed,roundId=identity,profile=profile,sourceBookId=source_id,lookupSha256=HASHES.get(profile),configSha256=config_hash,
         bookJson=encoded,sha256=hashlib.sha256(encoded.encode()).hexdigest())
 
 class Handler(BaseHTTPRequestHandler):

@@ -16,6 +16,8 @@ class LineAward:
     count: int
     amount: int
     positions: tuple[tuple[int, int], ...]
+    multiplier: int = 1
+    base_amount: int = 0
 
 @dataclass(frozen=True)
 class LineResult:
@@ -23,7 +25,7 @@ class LineResult:
     awards: tuple[LineAward, ...]
 
 def evaluate_lines(board: Sequence[Sequence[str]], paths: Mapping[int, Sequence[int]],
-                   paytable: Mapping[tuple[str, int], int]) -> LineResult:
+                   paytable: Mapping[tuple[str, int], int], wild_multipliers=None) -> LineResult:
     """Highest crop/length award once per line; tie display uses crop ID then length.
 
     Board is reel-major, unpadded 5x3. Positions use zero-based visible rows.
@@ -33,6 +35,10 @@ def evaluate_lines(board: Sequence[Sequence[str]], paths: Mapping[int, Sequence[
         raise ValueError('Expected unpadded reel-major 5x3 board')
     if any(symbol not in (*CROPS, 'W', 'S') for reel in board for symbol in reel):
         raise ValueError('Unknown semantic symbol')
+    if wild_multipliers is not None:
+        expected_wilds={(r,y) for r in range(5) for y in range(3) if board[r][y]=='W'}
+        if set(wild_multipliers)!=expected_wilds or any(type(v) is not int or v not in (1,2,3) for v in wild_multipliers.values()):
+            raise ValueError('Explicit 1/2/3 multiplier required for every Wild only')
     if not paths or any(type(k) is not int or k < 1 for k in paths):
         raise ValueError('Positive integer line IDs required')
     if any(len(p) != 5 or any(type(y) is not int or y not in (0,1,2) for y in p) for p in paths.values()):
@@ -52,9 +58,11 @@ def evaluate_lines(board: Sequence[Sequence[str]], paths: Mapping[int, Sequence[
             for count in (3,4,5):
                 if not all(board[r][path[r]] in (crop,'W') for r in range(count)):
                     continue
-                amount=paytable[crop,count]
+                multiplier=max(1,sum(wild_multipliers[r,path[r]] for r in range(count) if board[r][path[r]]=='W')) if wild_multipliers is not None else 1
+                base_amount=paytable[crop,count]
+                amount=base_amount*multiplier
                 if amount and (best is None or amount > best.amount):
-                    best=LineAward(line_id,crop,count,amount,tuple((r,path[r]) for r in range(count)))
+                    best=LineAward(line_id,crop,count,amount,tuple((r,path[r]) for r in range(count)),multiplier,base_amount)
         if best is not None: awards.append(best)
     total=sum(a.amount for a in awards)
     if total>MAX_SAFE_INTEGER:

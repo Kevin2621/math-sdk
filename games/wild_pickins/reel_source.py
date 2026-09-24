@@ -18,8 +18,8 @@ class ReelSource:
             for stop in range(len(strip)):
                 if sum(strip[(stop+y)%len(strip)]=='S' for y in range(3))>1:
                     raise ValueError('Strip allows multiple visible scatters, including wraparound')
-    def draw(self,rng):
-        stops=tuple(rng.randrange(len(strip)) for strip in self.strips)
+    def draw(self,rng,*,experiment_random=None,mode=None,spin_index=None):
+        stops=tuple((rng if experiment_random is None else experiment_random.stream(mode,spin_index,'reel-stop',r)).randrange(len(strip)) for r,strip in enumerate(self.strips))
         return ReelSample(
             [[strip[(stop+y)%len(strip)] for y in range(3)] for strip,stop in zip(self.strips,stops)],
             stops,tuple(strip[(stop-1)%len(strip)] for strip,stop in zip(self.strips,stops)),
