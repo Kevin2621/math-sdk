@@ -22,13 +22,15 @@ def weighted_profile(profile):
     return load_profile(profile, CONFIG)
 
 @lru_cache(maxsize=128)
-def round_response(seed, identity, profile='natural'):
+def round_response(seed, identity, profile='natural', mode='base'):
+    if mode not in ('base', 'bonus') or (mode == 'bonus' and profile != 'multiplier-wilds'):
+        raise ValueError('Unsupported purchase mode/profile')
     if profile in ('candidate-1','candidate-3','candidate-500k-1'):
         return candidate_response(seed,identity,profile)
     source_id=identity
     config_hash=CONFIG_HASH
     if profile=='multiplier-wilds':
-        _,book=generate_round(MULTIPLIER_CONFIG,seed,identity)
+        _,book=generate_round(MULTIPLIER_CONFIG,seed,identity,mode=mode)
         config_hash=MULTIPLIER_HASH
     elif profile=='natural':
         _,book=generate_round(CONFIG,seed,identity)
@@ -38,7 +40,7 @@ def round_response(seed, identity, profile='natural'):
         sdk,book=generate_round(CONFIG,source_seed,source_id)
         if sdk['payoutMultiplier']!=expected:raise ValueError('Weighted source payout mismatch')
     encoded=json.dumps(book,separators=(',',':'))
-    return dict(protocol='wp-local-1',seed=seed,roundId=identity,profile=profile,sourceBookId=source_id,lookupSha256=HASHES.get(profile),configSha256=config_hash,
+    return dict(protocol='wp-local-1',seed=seed,roundId=identity,profile=profile,mode=mode,sourceBookId=source_id,lookupSha256=HASHES.get(profile),configSha256=config_hash,
         bookJson=encoded,sha256=hashlib.sha256(encoded.encode()).hexdigest())
 
 class Handler(BaseHTTPRequestHandler):
@@ -52,10 +54,10 @@ class Handler(BaseHTTPRequestHandler):
             if url.path=='/health':payload=dict(status='ready',configSha256=CONFIG_HASH)
             elif url.path=='/round':
                 args=parse_qs(url.query,strict_parsing=True)
-                if set(args) not in ({'seed','id'},{'seed','id','profile'}):raise ValueError('seed and id required')
+                if not {'seed','id'} <= set(args) or not set(args) <= {'seed','id','profile','mode'} or any(len(v) != 1 for v in args.values()):raise ValueError('seed and id required')
                 seed=int(args['seed'][0]);identity=int(args['id'][0])
                 if not 0<=seed<=2**32-1 or not 0<=identity<1000000:raise ValueError('Invalid round identity')
-                payload=round_response(seed,identity,args.get('profile',['natural'])[0])
+                payload=round_response(seed,identity,args.get('profile',['natural'])[0],args.get('mode',['base'])[0])
             else:self.send_error(404);return
             encoded=json.dumps(payload,separators=(',',':')).encode()
             self.send_response(200)

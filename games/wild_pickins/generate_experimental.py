@@ -23,7 +23,10 @@ ROOT=Path(__file__).resolve().parents[3]
 sys.path.insert(0,str(ROOT/'wild-pickins/tools'))
 from contract import validate
 
-def generate_round(config,seed,round_id,*,base_sample=None):
+def generate_round(config,seed,round_id,*,base_sample=None,mode="base"):
+    if mode not in ('base', 'bonus'): raise ValueError('Unknown purchase mode')
+    if mode == 'bonus' and (config.get('schemaVersion') != 4 or base_sample is not None):
+        raise ValueError('Standard bonus requires schema 4 and no base sample')
     if config.get('experimentalOnly') is not True: raise ValueError('Explicit experimental config required')
     sources={mode:ReelSource(config['reels'][mode]) for mode in ('basegame','freegame')}
     rng=Random(f'wild-pickins:{seed}:{round_id}')
@@ -41,12 +44,17 @@ def generate_round(config,seed,round_id,*,base_sample=None):
         collision_spins_per_hit=fm.get('collisionSpinsPerHit',False),
         settlement_policy=fm.get('settlementPolicy','fullHarvest'),experiment_random=indexed)
     exporter=BookExporter()
+    if mode == 'bonus':
+        model.start_standard_bonus()
+        exporter.events.append(dict(index=0, type='freeSpinTrigger', spinId=-1,
+                                    totalFs=10, positions=[], purchase=True))
     while not model.ended:
         sample=base_sample if model.mode=='basegame' and base_sample is not None else sources[model.mode].draw(rng,experiment_random=indexed,mode=model.mode,spin_index=0 if model.mode=='basegame' else model.completed)
         result=model.spin(sample.board)  # No fixture target override.
         exporter.append(result,finished=model.ended,win_level=config['winLevel'],reel_sample=sample)
     envelope={k:config[k] for k in ('schemaVersion','gameId','lineSetId','mathVersion','assetMapVersion','spinBudget','roundCap','fixtureMath')}
     envelope.update(fixtureOnly=True,events=exporter.events)
+    if mode == 'bonus': envelope['entryMode'] = 'standardBonusBuy'
     validate(envelope)
     sdk=Book(round_id,'experimental')
     for event in exporter.events: sdk.add_event(event)

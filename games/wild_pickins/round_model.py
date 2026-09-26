@@ -56,6 +56,15 @@ class RoundModel:
             if len(self.wild_multiplier_weights)!=3 or any(type(w) is not int or w<0 for w in self.wild_multiplier_weights) or not sum(self.wild_multiplier_weights):
                 raise ValueError('Explicit nonnegative weights for 1x/2x/3x required')
 
+    def start_standard_bonus(self):
+        """Direct entry: ten spins, no paid base outcome or carried Wilds."""
+        if self.spin_id != -1 or self.mode != 'basegame' or self.ended:
+            raise ValueError('Bonus purchase requires a fresh round')
+        if self.settlement_policy != 'accumulation':
+            raise ValueError('Bonus purchase requires accumulation settlement')
+        self.mode = 'freegame'
+        self.granted = self.remaining = 10
+
     def spin(self, underlying, *, fixture_target=...):
         """Resolve one spin. fixture_target is a deterministic test override, not live input."""
         if self.ended: raise ValueError('Round already ended')
